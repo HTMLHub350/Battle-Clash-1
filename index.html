@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Multiplayer Fighting Game</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .container.fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            gap: 0;
+            padding: 0;
+            background-color: #000;
+            z-index: 10000;
+        }
+        .game-area {
+            flex: 1;
+        }
+        .container.fullscreen .game-area {
+            width: 100%;
+            height: 100%;
+        }
+        .sidebar {
+            width: 300px;
+        }
+        .container.fullscreen .sidebar {
+            display: none;
+        }
+        #gameSVG {
+            border: 2px solid #333;
+            background-color: #fff;
+            display: block;
+            margin-bottom: 10px;
+            width: 100%;
+            height: auto;
+            preserveAspectRatio: xMidYMid meet;
+        }
+        .container.fullscreen #gameSVG {
+            width: 100vw;
+            height: 100vh;
+            margin: 0;
+            border: none;
+            preserveAspectRatio: xMidYMid meet;
+        }
+        .controls {
+            background: #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .controls h3 {
+            margin-top: 0;
+        }
+        input[type="text"] {
+            width: 150px;
+            padding: 5px;
+        }
+        button {
+            padding: 5px 15px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            margin-right: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .info-box {
+            background: white;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .info-box h4 {
+            margin: 0 0 8px 0;
+        }
+        .info-box p {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        #highscoresContent {
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre;
+            overflow-y: auto;
+            max-height: 300px;
+        }
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #28a745;
+            color: white;
+            padding: 10px 20px;
+            display: none;
+            border-radius: 8px;
+            z-index: 1000;
+        }
+        #chatInput.fullscreen {
+            bottom: auto !important;
+            left: 50px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+        }
+        .dead-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none;
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        .dead-overlay.show {
+            display: flex;
+        }
+        .dead-message {
+            background-color: white;
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        .dead-message h2 {
+            color: #ff0000;
+            margin-top: 0;
+            font-size: 36px;
+        }
+        .dead-message p {
+            font-size: 18px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+
+<div id="deadOverlay" class="dead-overlay">
+    <div class="dead-message">
+        <h2>YOU DIED!</h2>
+        <p>You have been defeated. Click "Join" to rejoin the game.</p>
+    </div>
+</div>
+
+<div class="container" id="mainContainer">
+    <div class="game-area">
+        <h1>Multiplayer Fighting Game</h1>
+        <div class="controls">
+            <h3>Join Game</h3>
+            <input type="text" id="usernameInput" placeholder="Enter username">
+            <button id="joinBtn" onclick="toggleConnection()">Join</button>
+            <button id="fullscreenBtn" onclick="toggleFullscreen()" disabled>Fullscreen</button>
+            <div id="statusMsg" style="margin-top: 5px; font-weight: bold;"></div>
+        </div>
+
+        <div style="position: relative; display: inline-block; width: 100%;">
+            <svg id="gameSVG" width="800" height="600" viewBox="0 0 800 600"></svg>
+            <input type="text" id="chatInput" style="position: fixed; bottom: 50px; left: 50px; width: 260px; padding: 5px; display: none; background: #000; color: #0f0; border: 2px solid #fff; font-family: monospace; font-size: 12px; z-index: 1000;">
+        </div>
+
+        <div class="info-box">
+            <h4 id="playerInfo">Not joined</h4>
+            <p><strong>Controls:</strong> Arrow Keys or WASD to move</p>
+            <p><strong>Action:</strong> SPACE to attack | Y/T for chat | Z to see all</p>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <h3>Highscores</h3>
+        <div class="info-box">
+            <div id="highscoresContent">
+Name                Score        Temp ID
+--------------------------------------------
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="notificationBox" class="notification"></div>
+
+<script>
+const socket = io();
+
+let joined = false;
+let username = "";
+let myPlayerId = null;
+let myColor = "";
+let myPlayerNumber = 0;
+let players = [];
+let bullets = [];
+let keys = {};
+let lastAttackTime = 0;
+let allChats = [];
+let showAllChats = false;
+const ATTACK_COOLDOWN = 500; // 0.5 seconds
+let isFullscreen = false;
+
+const svg = document.getElementById("gameSVG");
+const SVG_WIDTH = 800;
+const SVG_HEIGHT = 600;
+
+// Keyboard input
+document.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    const chatInput = document.getElementById("chatInput");
+    const isChatFocused = chatInput && chatInput === document.activeElement;
+    const isAnyInputFocused = document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA");
+
+    keys[key] = true;
+
+    // If any input is focused, don't process game keys
+    if (isAnyInputFocused) {
+        // If chat input is focused and 0 pressed, close chat
+        if (isChatFocused && key === "0") {
+            e.preventDefault();
+            chatInput.style.display = "none";
+            chatInput.blur();
+        }
+        return;
+    }
+
+    if (e.key === " ") {
+        e.preventDefault();
+        if (joined) {
+            const now = Date.now();
+            if (now - lastAttackTime >= ATTACK_COOLDOWN) {
+                socket.emit("attack");
+                lastAttackTime = now;
+            }
+        }
+    } else if (key === "y" || key === "t") {
+        e.preventDefault();
+        if (chatInput) {
+            chatInput.style.display = "block";
+            chatInput.focus();
+            chatInput.dataset.chatType = key === "y" ? "normal" : "team";
+            chatInput.value = "";
+        }
+    } else if (key === "z") {
+        e.preventDefault();
+        showAllChats = !showAllChats;
+        renderChats();
+    } else if (key === "escape" && isChatFocused) {
+        chatInput.style.display = "none";
+        chatInput.blur();
+    }
+});
+
+document.addEventListener("keyup", (e) => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+// Chat input handler
+const chatInputElement = document.getElementById("chatInput");
+chatInputElement.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+        const message = e.target.value.trim();
+        if (message && username) {
+            const chatType = e.target.dataset.chatType || "normal";
+            socket.emit("send_chat", {
+                username: username,
+                message: message,
+                type: chatType
+            });
+            e.target.value = "";
+            e.target.style.display = "none";
+        }
+    } else if (e.key === "Escape") {
+        e.target.style.display = "none";
+    }
+});
+
+function renderChats() {
+    const chatContent = document.getElementById("chatContent");
+    const chatsToShow = showAllChats ? allChats : allChats.slice(-5);
+
+    chatContent.innerHTML = chatsToShow.map(chat => {
+        const typeLabel = chat.type === "team" ? "[TEAM]" : "";
+        return `<div style="margin-bottom: 5px; padding: 3px; border-bottom: 1px solid #ddd;">
+            <strong>${chat.username}</strong> ${typeLabel}: ${chat.message}
+        </div>`;
+    }).join("");
+
+    chatContent.scrollTop = chatContent.scrollHeight;
+}
+
+function toggleFullscreen() {
+    isFullscreen = !isFullscreen;
+    const container = document.getElementById("mainContainer");
+    const fullscreenBtn = document.getElementById("fullscreenBtn");
+    const chatInput = document.getElementById("chatInput");
+
+    if (isFullscreen) {
+        container.classList.add("fullscreen");
+        chatInput.classList.add("fullscreen");
+        fullscreenBtn.innerText = "Exit Fullscreen";
+    } else {
+        container.classList.remove("fullscreen");
+        chatInput.classList.remove("fullscreen");
+        fullscreenBtn.innerText = "Fullscreen";
+    }
+}
+
+function toggleConnection() {
+    if (!joined) {
+        username = document.getElementById("usernameInput").value.trim();
+        if (!username) {
+            alert("Enter username first");
+            return;
+        }
+
+        if (username.startsWith("bot:")) {
+            const botName = username.substring(4);
+            socket.emit("spawn_bot", { name: botName });
+        } else {
+            socket.emit("join", { username: username });
+        }
+    } else {
+        socket.disconnect();
+        location.reload();
+    }
+}
+
+function updatePlayerPosition() {
+    if (!joined) return;
+
+    const chatInput = document.getElementById("chatInput");
+    const isChatFocused = chatInput && chatInput === document.activeElement;
+
+    // Pause movement while typing comment
+    if (isChatFocused) {
+        socket.emit("update_bullets");
+        return;
+    }
+
+    let dx = 0, dy = 0;
+    const speed = 5;
+
+    if (keys["arrowup"] || keys["w"]) dy -= speed;
+    if (keys["arrowdown"] || keys["s"]) dy += speed;
+    if (keys["arrowleft"] || keys["a"]) dx -= speed;
+    if (keys["arrowright"] || keys["d"]) dx += speed;
+
+    if (dx !== 0 || dy !== 0) {
+        const myPlayer = players.find(p => p.sid === socket.id);
+        if (myPlayer) {
+            const newX = Math.max(0, Math.min(SVG_WIDTH, myPlayer.x + dx));
+            const newY = Math.max(0, Math.min(SVG_HEIGHT, myPlayer.y + dy));
+            socket.emit("move_player", { x: newX, y: newY });
+        }
+    }
+
+    // Tell server to update bullets
+    socket.emit("update_bullets");
+}
+
+function drawGame() {
+    // Clear SVG
+    while (svg.firstChild) {
+        svg.removeChild(svg.firstChild);
+    }
+
+    // Draw background
+    const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bg.setAttribute("width", SVG_WIDTH);
+    bg.setAttribute("height", SVG_HEIGHT);
+    bg.setAttribute("fill", "#fff");
+    svg.appendChild(bg);
+
+    // Draw grid
+    for (let i = 0; i <= SVG_WIDTH; i += 50) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", i);
+        line.setAttribute("y1", 0);
+        line.setAttribute("x2", i);
+        line.setAttribute("y2", SVG_HEIGHT);
+        line.setAttribute("stroke", "#eee");
+        line.setAttribute("stroke-width", 1);
+        svg.appendChild(line);
+    }
+    for (let i = 0; i <= SVG_HEIGHT; i += 50) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", 0);
+        line.setAttribute("y1", i);
+        line.setAttribute("x2", SVG_WIDTH);
+        line.setAttribute("y2", i);
+        line.setAttribute("stroke", "#eee");
+        line.setAttribute("stroke-width", 1);
+        svg.appendChild(line);
+    }
+
+    // Draw bullets first (so they appear behind players)
+    bullets.forEach(bullet => {
+        const bulletCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        bulletCircle.setAttribute("cx", bullet.x);
+        bulletCircle.setAttribute("cy", bullet.y);
+        bulletCircle.setAttribute("r", 4);
+        bulletCircle.setAttribute("fill", "#ff0000");
+        bulletCircle.setAttribute("stroke", "#cc0000");
+        bulletCircle.setAttribute("stroke-width", 1);
+        svg.appendChild(bulletCircle);
+    });
+
+    // Draw chat box at bottom left
+    const chatBoxX = 10;
+    const chatBoxWidth = 280;
+    const baseHeight = 110;
+
+    // Chat messages (show last 5 or all if Z pressed)
+    const chatsToShow = showAllChats ? allChats : allChats.slice(-5);
+    let chatBoxHeight = baseHeight;
+
+    if (showAllChats) {
+        chatBoxHeight = Math.min(SVG_HEIGHT - 150, 30 + chatsToShow.length * 20);
+    }
+
+    const chatBoxY = SVG_HEIGHT - chatBoxHeight - 80;
+
+    // Chat background
+    const chatBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    chatBg.setAttribute("x", chatBoxX);
+    chatBg.setAttribute("y", chatBoxY);
+    chatBg.setAttribute("width", chatBoxWidth);
+    chatBg.setAttribute("height", chatBoxHeight);
+    chatBg.setAttribute("fill", "#000");
+    chatBg.setAttribute("opacity", "0.7");
+    svg.appendChild(chatBg);
+
+    // Chat border
+    const chatBorder = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    chatBorder.setAttribute("x", chatBoxX);
+    chatBorder.setAttribute("y", chatBoxY);
+    chatBorder.setAttribute("width", chatBoxWidth);
+    chatBorder.setAttribute("height", chatBoxHeight);
+    chatBorder.setAttribute("fill", "none");
+    chatBorder.setAttribute("stroke", "#fff");
+    chatBorder.setAttribute("stroke-width", 2);
+    svg.appendChild(chatBorder);
+
+    // Chat messages
+    chatsToShow.forEach((chat, idx) => {
+        const msgText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        msgText.setAttribute("x", chatBoxX + 8);
+        msgText.setAttribute("y", chatBoxY + 20 + (idx * 20));
+        msgText.setAttribute("font-size", 10);
+        msgText.setAttribute("fill", "#0f0");
+        msgText.setAttribute("font-family", "monospace");
+        const typeLabel = chat.type === "team" ? "[T] " : "";
+        msgText.textContent = `${typeLabel}${chat.username}: ${chat.message.substring(0, 30)}`;
+        svg.appendChild(msgText);
+    });
+
+    // Draw players as colored cubes
+    players.forEach(player => {
+        const size = 40;
+        const x = player.x - size / 2;
+        const y = player.y - size / 2;
+
+        // Draw cube
+        const cube = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        cube.setAttribute("x", x);
+        cube.setAttribute("y", y);
+        cube.setAttribute("width", size);
+        cube.setAttribute("height", size);
+        cube.setAttribute("fill", player.color);
+        cube.setAttribute("stroke", "#000");
+        cube.setAttribute("stroke-width", 2);
+        svg.appendChild(cube);
+
+        // Draw health bar background
+        const barWidth = 50;
+        const barHeight = 5;
+        const barX = player.x - barWidth / 2;
+        const barY = y - 15;
+
+        const barBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        barBg.setAttribute("x", barX);
+        barBg.setAttribute("y", barY);
+        barBg.setAttribute("width", barWidth);
+        barBg.setAttribute("height", barHeight);
+        barBg.setAttribute("fill", "#ddd");
+        barBg.setAttribute("stroke", "#000");
+        barBg.setAttribute("stroke-width", 1);
+        svg.appendChild(barBg);
+
+        // Draw health bar
+        const healthPercent = Math.max(0, player.health / 100);
+        const healthColor = healthPercent > 0.3 ? "#00aa00" : "#ff0000";
+        const bar = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        bar.setAttribute("x", barX);
+        bar.setAttribute("y", barY);
+        bar.setAttribute("width", barWidth * healthPercent);
+        bar.setAttribute("height", barHeight);
+        bar.setAttribute("fill", healthColor);
+        svg.appendChild(bar);
+
+        // Draw name
+        const nameText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        nameText.setAttribute("x", player.x);
+        nameText.setAttribute("y", player.y + size / 2 + 15);
+        nameText.setAttribute("text-anchor", "middle");
+        nameText.setAttribute("font-size", 12);
+        nameText.setAttribute("fill", "#000");
+        nameText.textContent = player.name;
+        svg.appendChild(nameText);
+
+        // Draw health
+        const healthText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        healthText.setAttribute("x", player.x);
+        healthText.setAttribute("y", player.y + size / 2 + 30);
+        healthText.setAttribute("text-anchor", "middle");
+        healthText.setAttribute("font-size", 11);
+        healthText.setAttribute("fill", "#000");
+        healthText.textContent = `HP: ${Math.round(player.health)}%`;
+        svg.appendChild(healthText);
+
+        // Highlight if this is the player
+        if (player.sid === socket.id) {
+            const highlight = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            highlight.setAttribute("x", x - 3);
+            highlight.setAttribute("y", y - 3);
+            highlight.setAttribute("width", size + 6);
+            highlight.setAttribute("height", size + 6);
+            highlight.setAttribute("fill", "none");
+            highlight.setAttribute("stroke", "#ffff00");
+            highlight.setAttribute("stroke-width", 3);
+            svg.appendChild(highlight);
+        }
+    });
+
+    updatePlayerPosition();
+    requestAnimationFrame(drawGame);
+}
+
+socket.on("connect", () => {
+    console.log("Connected to server");
+});
+
+socket.on("join_response", (data) => {
+    myPlayerNumber = data.player_number;
+    myColor = data.color;
+    joined = true;
+    document.getElementById("deadOverlay").classList.remove("show");
+    document.getElementById("joinBtn").innerText = "Disconnect";
+    document.getElementById("fullscreenBtn").disabled = false;
+    document.getElementById("usernameInput").disabled = true;
+    document.getElementById("playerInfo").innerText = `Player ${myPlayerNumber} (${myColor}) - ${username}`;
+    document.getElementById("statusMsg").innerText = "Joined! Use arrow keys or WASD to move, SPACE to attack.";
+});
+
+socket.on("join_error", (message) => {
+    alert(message);
+});
+
+socket.on("game_state", (state) => {
+    if (state.players) {
+        players = state.players;
+        bullets = state.bullets || [];
+    } else {
+        // Fallback for old format
+        players = state;
+        bullets = [];
+    }
+
+    // Check if player is dead
+    const myPlayer = players.find(p => p.sid === socket.id);
+    if (myPlayer && myPlayer.health <= 0) {
+        joined = false;
+        document.getElementById("deadOverlay").classList.add("show");
+        document.getElementById("joinBtn").innerText = "Join";
+        document.getElementById("fullscreenBtn").disabled = true;
+        document.getElementById("usernameInput").disabled = false;
+    }
+});
+
+socket.on("notification", (message) => {
+    const box = document.getElementById("notificationBox");
+    box.innerText = message;
+    box.style.display = "block";
+    setTimeout(() => box.style.display = "none", 3000);
+});
+
+socket.on("update_highscores", (players) => {
+    let content = "Name                Score        Temp ID\n";
+    content += "--------------------------------------------\n";
+    players.forEach(p => {
+        content += `${p.name.padEnd(20)} ${String(p.score).padEnd(12)} ${p.tempId}\n`;
+    });
+    document.getElementById("highscoresContent").innerText = content;
+});
+
+socket.on("load_chats", (chats) => {
+    allChats = chats;
+    renderChats();
+});
+
+socket.on("new_chat", (chat) => {
+    allChats.push(chat);
+    renderChats();
+});
+
+// Start game loop
+drawGame();
+</script>
+
+</body>
+</html>
