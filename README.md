@@ -30,7 +30,7 @@ pip install flask flask-socketio python-socketio python-engineio
 python server.py
 ```
 
-The game will be available at `http://localhost:3003`
+The game will be available at `http://0.0.0.0:3003`
 
 ## How to Play
 
