@@ -47,11 +47,11 @@ def handle_spawn_bot(data):
 
     # Parse bot name and level
     level = 1
-    if "/lvl=" in bot_input:
-        bot_name, level_str = bot_input.split("/lvl=")
+    if "&level=" in bot_input:
+        bot_name, level_str = bot_input.split("&level=")
         try:
             level = int(level_str)
-            if level < 1 or level > 5:
+            if level < 1 or level > 6:
                 level = 1
         except:
             level = 1
@@ -67,9 +67,14 @@ def handle_spawn_bot(data):
     color = player_colors[player_number % len(player_colors)]
 
     # Bot stats scale with level
-    speed = 2 + (level - 1) * 0.5
-    health = 100 + (level - 1) * 20
-    attack_range = 150 + (level - 1) * 25
+    if level == 6:
+        speed = 180
+        health = 1000
+        attack_range = 800
+    else:
+        speed = 2 + (level - 1) * 0.5
+        health = 100 + (level - 1) * 20
+        attack_range = 150 + (level - 1) * 25
 
     bots[bot_id] = {
         "name": bot_name,
@@ -117,9 +122,7 @@ def handle_request_chats():
 
 @socketio.on("connect")
 def handle_connect():
-    # Send current highscores to any client, even if not joined
     emit("update_highscores", saved_highscores)
-    # Send saved chats
     emit("load_chats", saved_chats)
 
 @socketio.on("join")
@@ -132,12 +135,9 @@ def handle_join(data):
         return
 
     temp_id = random.randint(1000, 9999)
-
-    # Assign player number (color index)
     player_number = len(players)
     color = player_colors[player_number % len(player_colors)]
 
-    # Load previous score if exists
     previous_score = next((p["score"] for p in saved_highscores if p["name"] == username), 0)
 
     players[request.sid] = {
@@ -174,12 +174,11 @@ def handle_attack():
     if not attacker:
         return
 
-    # Create 4 bullets in each direction
     directions = [
-        {"vx": 0, "vy": -7},   # up
-        {"vx": 0, "vy": 7},    # down
-        {"vx": -7, "vy": 0},   # left
-        {"vx": 7, "vy": 0}     # right
+        {"vx": 0, "vy": -7}, 
+        {"vx": 0, "vy": 7}, 
+        {"vx": -7, "vy": 0}, 
+        {"vx": 7, "vy": 0} 
     ]
 
     for direction in directions:
@@ -191,7 +190,6 @@ def handle_attack():
             "owner_sid": request.sid
         })
 
-    # Immediately broadcast bullets to all clients
     emit_game_state()
 
 @socketio.on("update_bullets")
@@ -200,32 +198,40 @@ def handle_update_bullets():
 
     # Update bot AI
     for bot_id, bot in list(bots.items()):
-        # Move bot
+        if bot["level"] == 6 and len(players) > 0:
+            closest_player = None
+            closest_distance = float('inf')
+            for sid, target in players.items():
+                distance = math.sqrt((bot["x"] - target["x"])**2 + (bot["y"] - target["y"])**2)
+                if distance < closest_distance:
+                    closest_distance = distance
+                    closest_player = target
+
+            if closest_player:
+                dx = closest_player["x"] - bot["x"]
+                dy = closest_player["y"] - bot["y"]
+                distance = math.sqrt(dx**2 + dy**2)
+                if distance > 0:
+                    bot["vx"] = (dx / distance) * bot["speed"]
+                    bot["vy"] = (dy / distance) * bot["speed"]
+        else:
+            bot["direction_change_timer"] -= 1
+            if bot["direction_change_timer"] <= 0:
+                speed = bot["speed"]
+                bot["vx"] = random.uniform(-speed, speed)
+                bot["vy"] = random.uniform(-speed, speed)
+                bot["direction_change_timer"] = random.randint(30, 90)
+
         bot["x"] += bot["vx"]
         bot["y"] += bot["vy"]
 
-        # Wrap around edges instead of bouncing
-        if bot["x"] < 0:
-            bot["x"] = 800
-        elif bot["x"] > 800:
-            bot["x"] = 0
-        if bot["y"] < 0:
-            bot["y"] = 600
-        elif bot["y"] > 600:
-            bot["y"] = 0
+        if bot["x"] < 0: bot["x"] = 800
+        elif bot["x"] > 800: bot["x"] = 0
+        if bot["y"] < 0: bot["y"] = 600
+        elif bot["y"] > 600: bot["y"] = 0
 
-        # Periodically change direction randomly
-        bot["direction_change_timer"] -= 1
-        if bot["direction_change_timer"] <= 0:
-            speed = bot["speed"]
-            bot["vx"] = random.uniform(-speed, speed)
-            bot["vy"] = random.uniform(-speed, speed)
-            bot["direction_change_timer"] = random.randint(30, 90)
-
-        # Bot attack cooldown
         bot["attack_cooldown"] -= 1
 
-        # Bot only attacks players that are nearby
         if bot["attack_cooldown"] <= 0 and len(players) > 0:
             closest_player = None
             closest_distance = float('inf')
@@ -236,32 +242,42 @@ def handle_update_bullets():
                     closest_player = (sid, target)
 
             if closest_player and closest_distance < bot["attack_range"]:
-                # Bot shoots 4 bullets
-                directions = [
-                    {"vx": 0, "vy": -7},
-                    {"vx": 0, "vy": 7},
-                    {"vx": -7, "vy": 0},
-                    {"vx": 7, "vy": 0}
-                ]
-                for direction in directions:
-                    bullets.append({
-                        "x": bot["x"],
-                        "y": bot["y"],
-                        "vx": direction["vx"],
-                        "vy": direction["vy"],
-                        "owner_sid": bot_id
-                    })
-                bot["attack_cooldown"] = 10 - (bot["level"] - 1) * 2
+                if bot["level"] == 6:
+                    for angle in range(0, 360, 1):
+                        rad = math.radians(angle)
+                        vx = math.cos(rad) * 7
+                        vy = math.sin(rad) * 7
+                        bullets.append({
+                            "x": bot["x"],
+                            "y": bot["y"],
+                            "vx": vx,
+                            "vy": vy,
+                            "owner_sid": bot_id
+                        })
+                    bot["attack_cooldown"] = 12
+                else:
+                    directions = [
+                        {"vx": 0, "vy": -7},
+                        {"vx": 0, "vy": 7},
+                        {"vx": -7, "vy": 0},
+                        {"vx": 7, "vy": 0}
+                    ]
+                    for direction in directions:
+                        bullets.append({
+                            "x": bot["x"],
+                            "y": bot["y"],
+                            "vx": direction["vx"],
+                            "vy": direction["vy"],
+                            "owner_sid": bot_id
+                        })
+                    bot["attack_cooldown"] = 10 - (bot["level"] - 1) * 2
 
-    # Move bullets first
     for bullet in bullets:
         bullet["x"] += bullet["vx"]
         bullet["y"] += bullet["vy"]
 
-    # Then remove bullets that went off screen
     bullets = [b for b in bullets if 0 <= b["x"] <= 800 and 0 <= b["y"] <= 600]
 
-    # Check collisions
     bullets_to_remove = []
     for i, bullet in enumerate(bullets):
         owner = players.get(bullet["owner_sid"]) or bots.get(bullet["owner_sid"])
@@ -269,13 +285,12 @@ def handle_update_bullets():
             bullets_to_remove.append(i)
             continue
 
-        # Check collision with players
         for sid, target in list(players.items()):
             if sid == bullet["owner_sid"]:
                 continue
 
             distance = math.sqrt((bullet["x"] - target["x"])**2 + (bullet["y"] - target["y"])**2)
-            if distance < 25:  # hit radius
+            if distance < 25:
                 damage = 5
                 target["health"] -= damage
                 bullets_to_remove.append(i)
@@ -302,13 +317,12 @@ def handle_update_bullets():
                     socketio.server.disconnect(sid)
                 break
 
-        # Check collision with bots
         for bot_id, target in list(bots.items()):
             if bot_id == bullet["owner_sid"]:
                 continue
 
             distance = math.sqrt((bullet["x"] - target["x"])**2 + (bullet["y"] - target["y"])**2)
-            if distance < 25:  # hit radius
+            if distance < 25:
                 damage = 5
                 target["health"] -= damage
                 bullets_to_remove.append(i)
@@ -334,7 +348,6 @@ def handle_update_bullets():
                     del bots[bot_id]
                 break
 
-    # Remove bullets that hit
     for i in sorted(bullets_to_remove, reverse=True):
         if i < len(bullets):
             bullets.pop(i)
@@ -349,7 +362,6 @@ def handle_disconnect():
         emit_highscores()
 
 def emit_game_state():
-    # Send all player states and bullets
     game_state = []
     for sid, player in players.items():
         game_state.append({
@@ -374,11 +386,9 @@ def emit_game_state():
         })
 
     bullets_state = [{"x": b["x"], "y": b["y"]} for b in bullets]
-
     emit("game_state", {"players": game_state, "bullets": bullets_state}, broadcast=True)
 
 def emit_highscores():
-    # Merge live players with saved highscores
     merged = {p["name"]: p for p in saved_highscores}
     for p in players.values():
         merged[p["name"]] = {"name": p["name"], "score": p["score"], "tempId": p["tempId"]}

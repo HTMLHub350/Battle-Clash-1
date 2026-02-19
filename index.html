@@ -217,7 +217,7 @@ let keys = {};
 let lastAttackTime = 0;
 let allChats = [];
 let showAllChats = false;
-const ATTACK_COOLDOWN = 500; // 0.5 seconds
+const ATTACK_COOLDOWN = 10; // 0.01 seconds
 let isFullscreen = false;
 
 const svg = document.getElementById("gameSVG");
@@ -334,8 +334,8 @@ function toggleConnection() {
             return;
         }
 
-        if (username.startsWith("bot:")) {
-            const botName = username.substring(4);
+        if (username.startsWith("#bot:")) {
+            const botName = username.substring(5);
             socket.emit("spawn_bot", { name: botName });
         } else {
             socket.emit("join", { username: username });
@@ -574,7 +574,39 @@ socket.on("join_response", (data) => {
 });
 
 socket.on("join_error", (message) => {
-    alert(message);
+    if (message === "closed") {
+        // Show access denied overlay
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        `;
+        const message_box = document.createElement("div");
+        message_box.style.cssText = `
+            text-align: center;
+            background-color: #000;
+            border: 3px solid #ff0000;
+            padding: 40px;
+            border-radius: 10px;
+        `;
+        message_box.innerHTML = `
+            <h2 style="color: #ff0000; margin: 0; font-size: 36px;">YOU DO NOT HAVE ACCESS TO SERVER</h2>
+            <p style="color: #fff; margin: 20px 0; font-size: 18px;">Server is closed from 6:13 PM to 7:00 AM</p>
+            <p style="color: #aaa; font-size: 14px;">Available: 7:00 AM - 6:13 PM</p>
+        `;
+        overlay.appendChild(message_box);
+        document.body.appendChild(overlay);
+    } else {
+        alert(message);
+    }
 });
 
 socket.on("game_state", (state) => {
